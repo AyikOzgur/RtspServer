@@ -109,25 +109,23 @@ impl RtspServer {
     }
 
     fn connection_accept(self_arc: Arc<Self>) {
-
         // Listen tcp sockets and jjust print the address of clients that tries to connect for now
         while self_arc.is_thread_running.load(Ordering::Relaxed) {
             let stream = self_arc.tcp_server.accept();
             match stream {
                 Ok((stream, address)) => {
                     println!("Client address {}", address);
-                let server_clone = Arc::clone(&self_arc);
-                thread::spawn(move || {
-                    server_clone.handle_client(stream);
-                });
-                }
+                    let server_clone = Arc::clone(&self_arc);
+                    thread::spawn(move || {
+                        server_clone.handle_client(stream);
+                    });
+                    }
                 Err(_) => {}
             }
         }
     }
 
     fn handle_client(&self, mut client: TcpStream) {
-
         let mut incoming_buffer: [u8; 2048] = [0u8; 2048];
         while self.is_thread_running.load(Ordering::Relaxed) {
             // Here we can read until any request comes
