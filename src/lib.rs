@@ -112,7 +112,6 @@ impl RtspServer {
 
         // Listen tcp sockets and jjust print the address of clients that tries to connect for now
         while self_arc.is_thread_running.load(Ordering::Relaxed) {
-
             let stream = self_arc.tcp_server.accept();
             match stream {
                 Ok((stream, address)) => {
@@ -139,7 +138,7 @@ impl RtspServer {
                 Ok(n) => {
                     if let Ok (message) = std::str::from_utf8(&incoming_buffer[..n]) {
                         let response =  self.handle_request(message);
-                        let _ = client.write(response.as_bytes());
+                        let _ = client.write_all(response.as_bytes());
                     } else {
                         println!("Invalid message from client[{}]", client.peer_addr().unwrap().port());
                     }
@@ -149,7 +148,7 @@ impl RtspServer {
         }
     }
 
-    fn handle_request(&self, buffer: &str) -> String{
+    fn handle_request(&self, buffer: &str) -> String {
         println!("Request : \n {}", buffer);
         let request: RtspRequest = buffer.parse().unwrap();
 
@@ -165,7 +164,6 @@ impl RtspServer {
                 "Public: OPTIONS, DESCRIBE, SETUP, TEARDOWN, PLAY, PAUSE\r\n\r\n".to_string()
             }
             RtspMethod::Describe => {
-
                 let sdp = 
                     "v=0\r\n\
                     o=- 0 0 IN IP4 127.0.0.1\r\n\
@@ -174,17 +172,21 @@ impl RtspServer {
                     m=video 0 RTP/AVP 96\r\n\
                     a=rtpmap:96 H264/90000";
 
-                format!("Content-Type: application/sdp\r\nContent-Length: {}\r\n\r\n{}\r\n", sdp.len(), sdp)
+                format!("Content-Type: application/sdp\r\nContent-Length: {}\r\n\r\n{}", sdp.len(), sdp)
             }
             RtspMethod::Setup => {
                 let transport = request.headers.get("Transport").unwrap();
-                let parts_of_transport: Vec<&str> = transport.split(';').collect();
 
-                let protocol = parts_of_transport.get(0).unwrap();
+                // Here parse the transport message and initialize the RTP pusher. Initially support only UDP maybe.
 
-                let mut return_value = String::from("Transport: ");
-                return_value.push_str(transport);
-                return_value
+                // You can append server_port if you like
+                let transport_header = format!("{};server_port=6000-6001", transport);
+
+                format!("Session: 47112344\r\nTransport: {}\r\n\r\n", transport)
+            }
+            RtspMethod::Play => {
+                // Maybe here enable RTP pusher.
+                format!("Session: 47112344\r\n\r\n")
             }
             _ => {
                 "".to_string()
@@ -192,14 +194,13 @@ impl RtspServer {
         };
 
         if response_body.len() == 0 {
-            return format!("RTSP/1.0 400 Bad Request \r\nCSeq: {}\r\n", request.cseq);
+            return format!("RTSP/1.0 400 Bad Request \r\nCSeq: {}\r\n\r\n", request.cseq);
         }
 
         let mut full_response = String::from(format!("RTSP/1.0 200 OK\r\nCSeq: {}\r\n", request.cseq));
         full_response.push_str(&response_body);
-
+        println!("Full response : \n {full_response}");
         full_response
-
     }
 
     pub fn add_stream(&self, stream_name: &str) {
