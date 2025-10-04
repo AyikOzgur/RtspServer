@@ -22,16 +22,16 @@ fn main() {
     loop {
         match extract_nal(remaining) {
             Some((nal_buf, is_last)) => {
-                println!("Nal found with size : {}", nal_buf.len());
                 if server.send_frame_to_stream("live" ,nal_buf) {
                     thread::sleep(Duration::from_millis(33));
                     remaining = &remaining[nal_buf.len()..];
                 } else {
+                    println!("There is no client connected");
                     continue;
                 }
 
                 if is_last {
-                    println!("Last nal");
+                    println!("Resetting video's beginning");
                     remaining = &buffer[..]; // Reset slice to beginning of the file.
                 }
             }

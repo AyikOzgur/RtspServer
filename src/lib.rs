@@ -66,6 +66,7 @@ impl RtspServer {
             // Here we can read until any request comes
             match client.read(&mut incoming_buffer) {
                 Ok(0) => { 
+                    // Here we have to clean the resource we allocated for this client. For example RtpPusher.
                     break; // Finish the thread because client is disconnected.
                 }
                 Ok(n) => {
@@ -130,6 +131,11 @@ impl RtspServer {
                 // Maybe here enable RTP pusher.
                 format!("Session: 47112344\r\n\r\n")
             }
+            RtspMethod::Teardown => {
+
+                println!("Teardown got");
+                "".to_string()
+            }
             _ => {
                 "".to_string()
             }
@@ -171,7 +177,7 @@ impl RtspServer {
             }
         }
 
-        false
+        true
     }
 
     pub fn stop(&self) {
