@@ -1,91 +1,25 @@
+mod rtsp_request;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,Mutex
 };
-use std::thread::{self};
+use std::thread;
 use std::collections::HashMap;
-use std::time::Duration;
+
+
+use rtp_transceive::H264RtpPusher;
+
+use crate::rtsp_request::{RtspMethod, RtspRequest};
 
 
 pub struct RtspServer {
     tcp_server: TcpListener,
     is_thread_running: AtomicBool,
-    streams: Mutex<Vec<String>>
-}
-
-enum RtspMethod {
-    Options,
-    Describe,
-    Setup,
-    Play,
-    Pause,
-    Teardown,
-    Announce,
-    Record,
-    Redirect,
-    Unknown(String), // fallback for unrecognized methods
-}
-
-impl std::str::FromStr for RtspMethod {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "OPTIONS"  => Ok(RtspMethod::Options),
-            "DESCRIBE" => Ok(RtspMethod::Describe),
-            "SETUP"    => Ok(RtspMethod::Setup),
-            "PLAY"     => Ok(RtspMethod::Play),
-            "PAUSE"    => Ok(RtspMethod::Pause),
-            "TEARDOWN" => Ok(RtspMethod::Teardown),
-            "ANNOUNCE" => Ok(RtspMethod::Announce),
-            "RECORD"   => Ok(RtspMethod::Record),
-            "REDIRECT" => Ok(RtspMethod::Redirect),
-            _          => Ok(RtspMethod::Unknown(s.to_string())),
-        }
-    }
-}
-
-struct RtspRequest {
-    method: RtspMethod,
-    uri: String,
-    version: String,
-    cseq: u32,
-    headers: HashMap<String, String>,
-    body: Option<String>,
-}
-impl std::str::FromStr for RtspRequest {
-    type Err = String; // could be a custom error type
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut lines = s.split("\r\n");
-
-        // Parse request line
-        let request_line = lines.next().ok_or("Empty request")?;
-        let mut parts = request_line.split_whitespace();
-        let method_str = parts.next().ok_or("Missing method")?;
-        let method = method_str.parse().map_err(|_| "Invalid method")?;
-        let uri = parts.next().ok_or("Missing URI")?.to_string();
-        let version = parts.next().ok_or("Missing version")?.to_string();
-
-        // Parse headers
-        let mut headers = HashMap::new();
-        for line in &mut lines {
-            if line.is_empty() { break; } // empty line = end of headers
-            if let Some((key, value)) = line.split_once(":") {
-                headers.insert(key.trim().to_string(), value.trim().to_string());
-            }
-        }
-
-        let cseq: u32 = headers.get("CSeq").unwrap().parse().unwrap();
-
-        // Parse body
-        let body: String = lines.collect::<Vec<_>>().join("\r\n");
-        let body = if body.is_empty() { None } else { Some(body) };
-
-        Ok(RtspRequest { method, uri, version, cseq, headers, body })
-    }
+    streams: Mutex<Vec<String>>,
+    rtp_pushers: Mutex<HashMap<String, H264RtpPusher>>
 }
 
 impl RtspServer {
@@ -97,6 +31,7 @@ impl RtspServer {
             tcp_server: tcp_server,
             is_thread_running: AtomicBool::new(true),
             streams: Mutex::new(Vec::new()), 
+            rtp_pushers: Mutex::new(HashMap::new())
         });
 
         let my_clone: Arc<RtspServer> = Arc::clone(&myself);
@@ -180,6 +115,15 @@ impl RtspServer {
                 // You can append server_port if you like
                 let transport_header = format!("{};server_port=6000-6001", transport);
 
+                let rtp_port = Self::extract_rtp_port(&transport).unwrap();
+                println!("Port: {rtp_port}");
+                let destination_address = format!("127.0.0.1:{}", rtp_port);
+
+                let rtp_pusher = H264RtpPusher::new(&destination_address);
+
+                let mut rtp_pushers = self.rtp_pushers.lock().unwrap();
+                rtp_pushers.insert(stream_name.to_string(), rtp_pusher);
+
                 format!("Session: 47112344\r\nTransport: {}\r\n\r\n", transport)
             }
             RtspMethod::Play => {
@@ -201,9 +145,33 @@ impl RtspServer {
         full_response
     }
 
+    fn extract_rtp_port(header: &str) -> Option<u16> {
+        header
+            .split(';')
+            .find_map(|part| part.trim().strip_prefix("client_port="))
+            .and_then(|ports| ports.split('-').next())
+            .and_then(|rtp| rtp.parse::<u16>().ok())
+    }
+
+
     pub fn add_stream(&self, stream_name: &str) {
         let mut streams = self.streams.lock().unwrap();
         streams.push(stream_name.to_string());
+    }
+
+    pub fn send_frame_to_stream(&self, stream_name: &str, frame_buffer: &[u8]) -> bool {
+        let mut pushers = self.rtp_pushers.lock().unwrap();
+        let pusher  = pushers.get_mut(stream_name);
+        match pusher {
+            Some (push) => {
+                push.send_frame(frame_buffer);
+            }
+            _ => {
+                return false;
+            }
+        }
+
+        false
     }
 
     pub fn stop(&self) {
